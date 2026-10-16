@@ -4,58 +4,149 @@ on:
   workflow_dispatch:
     inputs:
       docker_images:
-        description: '请填写docker镜像名称，多个用英文逗号分开'
+        description: '请填写docker镜像名称，多个用英文逗号或换行分开 (平台: linux/arm/v7)'
         required: true
         default: 'alpine:latest,alpine/curl,busybox:stable-glibc'
 
+# 创建 / 更新 Release 必须写入权限; 缺少这一段时 GITHUB_TOKEN 默认只读,
+# 会报 403 Resource not accessible by integration
+permissions:
+  contents: write
+
+# 固定 tag 意味着重复运行会更新同一个 Release, 串行执行避免并发覆盖
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  PLATFORM: linux/arm/v7
+  ARCH: arm32
+  RELEASE_TAG: DockerTarBuilder-ARM32
+
 jobs:
   pull_and_package:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift || true
+          docker system prune -a -f || true
+          df -h /
 
       - name: Pull Docker Images and Package
+        env:
+          DOCKER_IMAGES: ${{ inputs.docker_images }}
         run: |
-          images="${{ github.event.inputs.docker_images }}"
-          IFS=',' read -r -a image_array <<< "$images"
-          for image in "${image_array[@]}"; do
-            docker pull "${image}" --platform "linux/arm/v7"
-            image_name="${image//\//_}"
-            image_name="${image_name//:/_}"
-            docker save "${image}" -o "${image_name}-arm32.tar"
-            gzip -c "${image_name}-arm32.tar" > "${image_name}-arm32.tar.gz"
-            rm "${image_name}-arm32.tar"
+          set -euo pipefail
+
+          # 兼容逗号 / 换行 / 多余空格, 过滤空项
+          mapfile -t images < <(
+            printf '%s\n' "$DOCKER_IMAGES" \
+              | tr ',' '\n' \
+              | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+              | grep -v '^$' || true
+          )
+
+          if [ "${#images[@]}" -eq 0 ]; then
+            echo "::error::没有解析到任何镜像名, 请检查 docker_images 输入。"
+            exit 1
+          fi
+
+          echo "平台: ${PLATFORM} (${ARCH}), 共 ${#images[@]} 个镜像"
+          printf '  - %s\n' "${images[@]}"
+
+          for image in "${images[@]}"; do
+            echo "::group::拉取并打包 ${image}"
+
+            if ! docker pull --platform "${PLATFORM}" "${image}"; then
+              echo "::error::拉取镜像失败: ${image} — 注意 linux/arm/v7 镜像比 amd64/arm64 少, 很多镜像并不提供 32 位 ARM 版本。"
+              exit 1
+            fi
+
+            safe_name="${image//\//_}"
+            safe_name="${safe_name//:/_}"
+            safe_name="${safe_name//@/_}"
+            archive="${safe_name}-${ARCH}.tar.gz"
+
+            # 边 save 边压缩, 避免中间 tar 文件占用双倍磁盘
+            if ! docker save "${image}" | gzip -c > "${archive}"; then
+              echo "::error::打包镜像失败: ${image} — 常见原因是镜像过大导致运行器磁盘空间不足。"
+              df -h /
+              exit 1
+            fi
+            ls -lh "${archive}"
+
+            echo "::endgroup::"
           done
 
-      - name: List generated files (debug step)
+      - name: Check release asset size limit
         run: |
-          echo "Preparing docker images list (.tar.gz) files:"
-          find $GITHUB_WORKSPACE -name "*.tar.gz"
-          release_name=$(TZ="Asia/Shanghai" date +'%Y-%m-%d %H:%M Build')
-          echo "RELEASE_NAME=$release_name" >> $GITHUB_ENV
+          set -euo pipefail
+          # GitHub Release 单个附件上限 2 GiB, 超限的镜像请改用 Artifact 工作流
+          limit=$((2 * 1024 * 1024 * 1024))
+          too_big=0
+          for f in *.tar.gz; do
+            [ -e "$f" ] || continue
+            size=$(stat -c %s "$f")
+            if [ "$size" -gt "$limit" ]; then
+              echo "::error file=$f::${f} 大小为 $(numfmt --to=iec "$size"), 超过 Release 单附件 2 GiB 上限。请改用 Artifact 工作流 (大于 2GB 的镜像)。"
+              too_big=1
+            fi
+          done
+          if [ "$too_big" -ne 0 ]; then
+            exit 1
+          fi
+          echo "所有文件均在 2 GiB 以内。"
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@master
+      - name: Build release metadata
+        run: |
+          set -euo pipefail
+          echo "RELEASE_NAME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M Build')" >> "$GITHUB_ENV"
+          {
+            echo "## 打包结果 (${ARCH} / ${PLATFORM})"
+            echo ""
+            echo "| 文件 | 大小 |"
+            echo "| --- | --- |"
+            for f in *.tar.gz; do
+              [ -e "$f" ] || continue
+              echo "| \`$f\` | $(du -h "$f" | cut -f1) |"
+            done
+            echo ""
+            echo "已发布到 Release: \`${RELEASE_TAG}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v3
         with:
-          tag_name: DockerTarBuilder-ARM32
+          tag_name: ${{ env.RELEASE_TAG }}
           name: ${{ env.RELEASE_NAME }} for ARM32
           body: |
-            [![Github](https://img.shields.io/badge/RELEASE:DockerTarBuilder-123456?logo=github&logoColor=fff&labelColor=green&style=for-the-badge)](https://www.bilibili.com/video/BV1EZ421M7mL) [![Github](https://img.shields.io/badge/国内加速站下载-FC7C0D?logo=github&logoColor=fff&labelColor=000&style=for-the-badge)](https://wkdaily.cpolar.top/archives/1)
-            ### How to use? For example
-            `docker load -i alpine_latest.tar.gz `
-            ### Video teaching
-            [![Bilibili](https://img.shields.io/badge/Bilibili-123456?logo=bilibili&logoColor=fff&labelColor=fb7299)](https://www.bilibili.com/video/BV1yyq6YREdF)
+            ### 使用方法
+
+            ```bash
+            docker load -i xxx.tar.gz
+            ```
+
+            - 平台: `linux/arm/v7` (32 位 ARM, 如树莓派 3/4 的 32 位系统)
+            - 下载 `.tar.gz` 后直接 `docker load` 即可, 无需手动解压 (Docker 会自动识别 gzip)。
+            - 同名文件会在下次运行时被覆盖。
+            - 提示: 32 位 ARM 镜像数量远少于 amd64/arm64, 若拉取失败请先确认该镜像是否提供 arm/v7 版本。
+
+            ### 教学视频
+
+            - https://www.bilibili.com/video/BV1EZ421M7mL
+            - https://www.bilibili.com/video/BV1yyq6YREdF
+          files: ${{ github.workspace }}/*.tar.gz
+          overwrite_files: true
+          fail_on_unmatched_files: true
           draft: false
           prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Docker images as release assets
-        uses: softprops/action-gh-release@v2.1.0
-        with:
-          tag_name: DockerTarBuilder-ARM32
-          files: ${{ github.workspace }}/*.tar.gz
           token: ${{ secrets.GITHUB_TOKEN }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

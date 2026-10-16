@@ -1,0 +1,3 @@
+# 工作流文件统一使用 LF 换行, 保持与仓库既有文件一致, 避免 Windows 端编辑产生整文件差异
+.github/workflows/*.yml text eol=lf
+.github/dependabot.yml  text eol=lf
