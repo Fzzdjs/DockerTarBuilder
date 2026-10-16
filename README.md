@@ -7,10 +7,14 @@
 它是一个工作流。可快速构建指定架构/平台的单个或多个docker镜像 并存储在Artifact文件或Release文件
 
 ## 使用说明
-https://wkdaily.cpolar.top/archives/gc
+图文步骤见 [README_CN.md](README_CN.md)。
 > 如果你的docker镜像小于2GB 你可以使用红色框框这三种Release工作流<br> 
 > 如果你的docker镜像大于2GB且小于5GB 你可以使用蓝色框框的这三种Artifact工作流<br>
 > 如果你的docker镜像大于5GB 比如 `vllm/vllm-openai:v0.6.4.post1` 抱歉了 只能自己解决网络问题直接pull了 本项目爱莫能助啦！
+
+### ⚠️ 使用前必须完成的两项仓库设置
+> 1. `Settings → Actions → General → Actions permissions` 选择 **Allow all actions**（fork 仓库默认可能关闭 Actions）<br>
+> 2. 同一页面的 `Workflow permissions` 选择 **Read and write permissions**（否则 Release 工作流会报 `403 Resource not accessible by integration`）
 
 <img src="https://github.com/user-attachments/assets/e537c746-ec4f-4588-9315-ecf73a05b8d0" width="40%" />
 
@@ -52,3 +56,20 @@ https://github.com/wukongdaily/DockerTarBuilder/wiki
 ## ❤️赞助作者 ⬇️⬇️
 
 [![点击这里赞助我](https://img.shields.io/badge/点击这里赞助我-支持作者的项目-orange?logo=github)](https://wkdaily.cpolar.top/01)
+
+---
+
+## 维护说明 / Maintenance
+
+本仓库已做可用性修复，当前依赖（均为 Node 24 运行时）：
+
+| 依赖 | 版本 | 说明 |
+| --- | --- | --- |
+| 运行器 | `ubuntu-24.04` | `ubuntu-22.04` 已于 2026-09-17 进入弃用周期 |
+| `actions/checkout` | `v5` | `v4` 及更早为 Node 20，运行时已被 GitHub 移除 |
+| `actions/upload-artifact` | `v6` | `v4` / `v5` 默认仍为 Node 20 |
+| `softprops/action-gh-release` | `v3` | `v2` 为 Node 20 |
+
+**此前全部工作流无法运行的原因**：GitHub 于 2026-09-23 从所有托管运行器中删除了 Node.js 20 运行时。任何在 `action.yml` 中声明 `runs.using: node20` 的 action 都会在启动阶段直接失败，因此上述三个依赖的旧版本会让 6 个工作流全部失效。
+
+仓库已加入 `.github/dependabot.yml`，每周自动检查 action 版本更新，避免同类问题再次发生。

@@ -1,0 +1,14 @@
+version: 2
+
+updates:
+  # 保持 actions/checkout、actions/upload-artifact、softprops/action-gh-release
+  # 等依赖为最新版本, 避免再次出现 "Node 20 运行时被移除导致工作流硬失败" 这类问题
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(actions)"
+    labels:
+      - "dependencies"

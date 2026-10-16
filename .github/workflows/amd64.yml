@@ -1,41 +1,112 @@
 name: x86-64 Pull and Save Docker Image
+
 on:
   workflow_dispatch:
     inputs:
       docker_images:
-        description: '请填写docker镜像名称 多个用英文逗号分开'
+        description: '请填写docker镜像名称 多个用英文逗号或换行分开 (平台: linux/amd64)'
         required: true
-        default: 'alpine:latest,busybox:stable-glibc'  # 设置默认的 Docker 镜像列表
+        default: 'alpine:latest,busybox:stable-glibc'
+      retention_days:
+        description: 'Artifact 保留天数, 范围 1-90'
+        required: false
+        default: '1'
+
+# 只需要读取仓库内容; 上传 Artifact 使用运行器内置令牌, 不需要 contents: write
+permissions:
+  contents: read
+
+# 同一工作流串行执行, 避免多次打包互相覆盖
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  PLATFORM: linux/amd64
+  ARCH: amd64
 
 jobs:
   pull_and_package:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v5
 
-    - name: Clean up Docker to free space
-      run: |
-          docker system prune -a -f
-          docker volume prune -f
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift || true
+          docker system prune -a -f || true
+          df -h /
 
-    - name: Pull Docker Images and Package
-      run: |
-        images="${{ github.event.inputs.docker_images }}"
-          IFS=',' read -r -a image_array <<< "$images"
-          for image in "${image_array[@]}"; do
-            docker pull "${image}" --platform "linux/amd64"
-            image_name="${image//\//_}"
-            image_name="${image_name//:/_}"
-            docker save "${image}" -o "${image_name}-amd64.tar"
-            gzip -c "${image_name}-amd64.tar" > "${image_name}-amd64.tar.gz"
-            rm "${image_name}-amd64.tar"
+      - name: Pull Docker Images and Package
+        env:
+          DOCKER_IMAGES: ${{ inputs.docker_images }}
+        run: |
+          set -euo pipefail
+
+          # 兼容逗号 / 换行 / 多余空格, 过滤空项
+          mapfile -t images < <(
+            printf '%s\n' "$DOCKER_IMAGES" \
+              | tr ',' '\n' \
+              | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+              | grep -v '^$' || true
+          )
+
+          if [ "${#images[@]}" -eq 0 ]; then
+            echo "::error::没有解析到任何镜像名, 请检查 docker_images 输入。"
+            exit 1
+          fi
+
+          echo "平台: ${PLATFORM} (${ARCH}), 共 ${#images[@]} 个镜像"
+          printf '  - %s\n' "${images[@]}"
+
+          for image in "${images[@]}"; do
+            echo "::group::拉取并打包 ${image}"
+
+            if ! docker pull --platform "${PLATFORM}" "${image}"; then
+              echo "::error::拉取镜像失败: ${image} — 请确认该镜像与标签存在, 且包含 ${PLATFORM} 平台的镜像。"
+              exit 1
+            fi
+
+            safe_name="${image//\//_}"
+            safe_name="${safe_name//:/_}"
+            safe_name="${safe_name//@/_}"
+            archive="${safe_name}-${ARCH}.tar.gz"
+
+            # 边 save 边压缩, 避免中间 tar 文件占用双倍磁盘
+            if ! docker save "${image}" | gzip -c > "${archive}"; then
+              echo "::error::打包镜像失败: ${image} — 常见原因是镜像过大导致运行器磁盘空间不足。"
+              df -h /
+              exit 1
+            fi
+            ls -lh "${archive}"
+
+            echo "::endgroup::"
           done
 
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: my-artifact
-        path: ${{ github.workspace }}/*.tar.gz
-        retention-days: 1  # 将保留天数设置为 1 天 最多可设置90天
+      - name: Write run summary
+        run: |
+          set -euo pipefail
+          {
+            echo "## 打包结果 (${ARCH} / ${PLATFORM})"
+            echo ""
+            echo "| 文件 | 大小 |"
+            echo "| --- | --- |"
+            for f in *.tar.gz; do
+              [ -e "$f" ] || continue
+              echo "| \`$f\` | $(du -h "$f" | cut -f1) |"
+            done
+            echo ""
+            echo '导入方式: `docker load -i <文件名>`'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: docker-images-${{ env.ARCH }}
+          path: ${{ github.workspace }}/*.tar.gz
+          retention-days: ${{ inputs.retention_days || '1' }}
+          if-no-files-found: error
