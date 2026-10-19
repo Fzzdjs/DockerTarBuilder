@@ -55,10 +55,10 @@ docker load < xxx.tar.gz
 
 | 依赖 | 版本 | 说明 |
 | --- | --- | --- |
-| 运行器 | `ubuntu-24.04` | `ubuntu-22.04` 已于 2026-09-17 进入弃用周期 |
-| `actions/checkout` | `v5` | `v4` 及更早为 Node 20，已被移除 |
-| `actions/upload-artifact` | `v6` | `v4`/`v5` 为 Node 20，已被移除 |
-| `softprops/action-gh-release` | `v3` | `v2` 为 Node 20，已被移除 |
+| 运行器 | `ubuntu-24.04` | 可用仓库变量切到自建/云主机（见下） |
+| `actions/checkout` | `v7` | `v4` 及更早为 Node 20，已被移除 |
+| `actions/upload-artifact` | `v7` | `v4`/`v5` 为 Node 20，已被移除 |
+| `softprops/action-gh-release` | `v3.0.3` | `v2` 为 Node 20，已被移除 |
 
 > **为什么之前完全跑不起来**：GitHub 于 2026-09-23 从所有托管运行器中删除了 Node.js 20 运行时。
 > 任何 `action.yml` 中声明 `runs.using: node20` 的 action 都会在启动阶段直接失败，
@@ -66,3 +66,18 @@ docker load < xxx.tar.gz
 >
 > 仓库已配置 `.github/dependabot.yml`，每周自动检查 action 版本更新并提交 PR，
 > 以便在 GitHub 再次淘汰旧运行时时及时跟进。
+
+### 切到自建中转机（GitHub 托管机不可用时）
+
+6 个工作流的运行器标签都取自仓库变量，默认值是 `ubuntu-24.04`：
+
+```yaml
+runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["ubuntu-24.04"]') }}
+```
+
+在 `Settings → Secrets and variables → Actions → Variables` 新增
+`RUNNER_LABELS`，值填 `["self-hosted","linux","x64"]` 即可切到自建机；
+删除该变量就回到 GitHub 托管运行器。
+
+自建机（如阿里云国际轻量应用服务器）的选型、部署、安全与运维方案见
+[docs/alibaba-cloud-swas-fallback.md](docs/alibaba-cloud-swas-fallback.md)。

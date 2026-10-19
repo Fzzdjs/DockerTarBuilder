@@ -25,11 +25,15 @@ env:
 
 jobs:
   pull_and_package:
-    runs-on: ubuntu-24.04
+    # 默认使用 GitHub 托管运行器。若要切到自建中转机（如阿里云国际轻量应用服务器），
+    # 只需在仓库 Settings -> Secrets and variables -> Actions -> Variables 里加
+    # RUNNER_LABELS=["self-hosted","linux","x64"]，无需改代码。
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["ubuntu-24.04"]') }}
+    timeout-minutes: 90
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Free disk space
         run: |
@@ -122,7 +126,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create or update GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v3.0.3
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           name: ${{ env.RELEASE_NAME }} for ARM64

@@ -65,11 +65,32 @@ https://github.com/wukongdaily/DockerTarBuilder/wiki
 
 | 依赖 | 版本 | 说明 |
 | --- | --- | --- |
-| 运行器 | `ubuntu-24.04` | `ubuntu-22.04` 已于 2026-09-17 进入弃用周期 |
-| `actions/checkout` | `v5` | `v4` 及更早为 Node 20，运行时已被 GitHub 移除 |
-| `actions/upload-artifact` | `v6` | `v4` / `v5` 默认仍为 Node 20 |
-| `softprops/action-gh-release` | `v3` | `v2` 为 Node 20 |
+| 运行器 | `ubuntu-24.04` | 可用仓库变量切到自建/云主机（见下节） |
+| `actions/checkout` | `v7` | `v4` 及更早为 Node 20，运行时已被 GitHub 移除 |
+| `actions/upload-artifact` | `v7` | `v4` / `v5` 默认仍为 Node 20 |
+| `softprops/action-gh-release` | `v3.0.3` | `v2` 为 Node 20 |
 
 **此前全部工作流无法运行的原因**：GitHub 于 2026-09-23 从所有托管运行器中删除了 Node.js 20 运行时。任何在 `action.yml` 中声明 `runs.using: node20` 的 action 都会在启动阶段直接失败，因此上述三个依赖的旧版本会让 6 个工作流全部失效。
 
 仓库已加入 `.github/dependabot.yml`，每周自动检查 action 版本更新，避免同类问题再次发生。
+
+### 切换到自建运行器（GitHub 托管机不可用时）
+
+6 个工作流的 `runs-on` 都写成：
+
+```yaml
+runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["ubuntu-24.04"]') }}
+```
+
+因此**不用改代码**，只要在 `Settings → Secrets and variables → Actions → Variables`
+新增变量 `RUNNER_LABELS`，值填 JSON 数组即可：
+
+```json
+["self-hosted","linux","x64"]
+```
+
+删掉该变量就自动回到 GitHub 托管运行器。自建中转机的完整采购、部署、安全与运维方案见
+[docs/alibaba-cloud-swas-fallback.md](docs/alibaba-cloud-swas-fallback.md)。
+
+> 自建机需要预先装好 Docker、git、curl，磁盘可用空间 ≥ 镜像体积的 2.5 倍，
+> 并保证能访问目标 registry。
